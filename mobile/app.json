@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "name": "Daylight",
+    "slug": "daylight-todo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#F6F7F3",
+    "android": { "package": "com.daylight.todo" },
+    "web": { "bundler": "metro", "name": "Daylight · Your space to focus" }
+  }
+}
