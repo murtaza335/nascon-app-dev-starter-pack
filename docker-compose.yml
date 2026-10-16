@@ -1,0 +1,145 @@
+# DO NOT add host-specific values. Grader runs this file as-is.
+name: nascon
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  backend:
+    build: ./backend
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  # Enable when the competition spec needs object storage.
+  # minio: minio/minio may not pull from Docker Hub; the same tag exists at quay.io/minio/minio. Use whichever pulls, and ask organizers before enabling it.
+  # minio:
+  #   image: minio/minio:RELEASE.2024-09-22T00-33-43Z
+  #   command: ["server", "/data", "--console-address", ":9001"]
+  #   environment:
+  #     MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+  #     MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio123}
+  #   ports:
+  #     - "9000:9000"
+  #     - "9001:9001"
+  #   volumes:
+  #     - minio-data:/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "wget -qO- http://localhost:9000/minio/health/live || exit 1"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+
+  # Enable when the competition spec needs a broker.
+  # rabbitmq:
+  #   image: rabbitmq:3.13-management-alpine
+  #   ports:
+  #     - "5672:5672"
+  #     - "15672:15672"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+
+  # Enable when the competition spec needs NATS.
+  # nats:
+  #   image: nats:2.10-alpine
+  #   command: ["-js", "-m", "8222"]
+  #   ports:
+  #     - "4222:4222"
+  #     - "8222:8222"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "wget -qO- http://localhost:8222/varz || exit 1"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+
+  # Enable when the competition spec needs notifications.
+  # ntfy:
+  #   image: binwiederhier/ntfy:v2.11.0
+  #   command: ["serve"]
+  #   ports:
+  #     - "80:80"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "wget -qO- http://localhost/v1/health || exit 1"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+
+  # Enable when the competition spec needs media ingest.
+  # mediamtx:
+  #   image: bluenviron/mediamtx:1.9.1
+  #   ports:
+  #     - "8554:8554"
+  #     - "8888:8888"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "wget -qO- http://localhost:8888/v3/config/get || exit 1"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+
+  # Enable when the competition spec needs WebRTC room services.
+  # livekit:
+  #   image: livekit/livekit-server:v1.7.2
+  #   ports:
+  #     - "7880:7880"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "wget -qO- http://localhost:7880/ || exit 1"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+
+  # Enable when the competition spec needs metrics and dashboards.
+  # prometheus:
+  #   image: prom/prometheus:v2.54.1
+  #   ports:
+  #     - "9090:9090"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/ready || exit 1"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+  # grafana:
+  #   image: grafana/grafana:11.2.0
+  #   ports:
+  #     - "3001:3000"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+
+volumes:
+  pgdata:

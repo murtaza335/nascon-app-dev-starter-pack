@@ -1,0 +1,70 @@
+services:
+  selenium-hub:
+    image: selenium/hub:4.24.0
+    profiles: ["ui"]
+    ports:
+      - "4442:4442"
+      - "4443:4443"
+      - "4444:4444"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4444/status >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  chrome:
+    image: selenium/node-chrome:4.24.0
+    profiles: ["ui"]
+    shm_size: "1gb"
+    depends_on:
+      selenium-hub:
+        condition: service_healthy
+    environment:
+      SE_EVENT_BUS_HOST: selenium-hub
+      SE_EVENT_BUS_PUBLISH_PORT: 4442
+      SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
+      SE_START_VNC: "false"
+      SE_NODE_MAX_SESSIONS: 2
+    healthcheck:
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Intel/AMD may add selenium/node-edge:4.24.0; Apple Silicon must swap chrome for seleniarm/node-chromium:4.24.0.
+  firefox:
+    image: selenium/node-firefox:4.24.0
+    profiles: ["ui-firefox"]
+    shm_size: "1gb"
+    depends_on:
+      selenium-hub:
+        condition: service_healthy
+    environment:
+      SE_EVENT_BUS_HOST: selenium-hub
+      SE_EVENT_BUS_PUBLISH_PORT: 4442
+      SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
+      SE_START_VNC: "false"
+      SE_NODE_MAX_SESSIONS: 2
+    healthcheck:
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  k6:
+    image: grafana/k6:0.54.0
+    profiles: ["perf"]
+    entrypoint: ["k6"]
+    command: ["run", "/scripts/smoke.js"]
+    volumes:
+      - ./tests/perf:/scripts:ro,z
+    environment:
+      BASE_URL: http://backend:3000
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /scripts/smoke.js"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
