@@ -8,17 +8,13 @@
 ## 1. System overview
 
 ```
-  [ Phone: React Native (Expo) ]
-        |  HTTP + JSON over the team hotspot
-        |  http://<laptop-ip>:3000
-        v
   [ api: Express, Node 20 ]  ------>  [ db: PostgreSQL 16 ]
         ^
         |
-  [ tests: supertest / Appium / k6 ]
+  [ tests: pytest / node:test ]
 ```
 
-Two containers only: `db` and `api`. The mobile app runs on the host and the phone, not in Docker. No Redis, queue, or storage service is needed for this app, so don't add one.
+This backend slice uses two containers only: `postgres` and `backend`. The mobile app is intentionally out of scope for this task, and no Redis, queue, or storage service is needed for the todo API.
 
 ## 2. Tech choices
 
@@ -30,9 +26,7 @@ Two containers only: `db` and `api`. The mobile app runs on the host and the pho
 | Database | PostgreSQL 16 (`postgres:16-alpine`), `pg` driver, plain SQL | Relational data, no ORM overhead |
 | Auth | JWT (`jsonwebtoken`), `bcryptjs` for hashing | Stateless, no native build issues on alpine |
 | Validation | `zod` | One schema gives validation and error details |
-| Backend tests | Jest + supertest | Calls the running API |
-| Mobile tests | Appium 2 (UiAutomator2) | Matches competition tooling, uses `testID`s |
-| Load test | k6 | Smoke load on E5 |
+| Backend tests | Node `node:test` for the container smoke and `pytest` for API checks | Simple, dependency-light coverage |
 
 ## 3. Repository layout
 
@@ -40,7 +34,7 @@ Two containers only: `db` and `api`. The mobile app runs on the host and the pho
 .
 ├── AGENTS.md  CLAUDE.md  ADR.md  TRACEABILITY.md  README.md
 ├── docker-compose.yml
-├── docker-compose.override.yml      # local-only (e.g. expose db port, hot reload)
+├── docker-compose.override.yml      # local-only (if needed)
 ├── docs/
 │   ├── REQUIREMENTS.md
 │   ├── ARCHITECTURE.md
@@ -51,29 +45,18 @@ Two containers only: `db` and `api`. The mobile app runs on the host and the pho
 │   ├── package.json / package-lock.json
 │   └── src/
 │       ├── index.js                 # boot: run migrations, listen on 0.0.0.0:PORT, SIGTERM
-│       ├── app.js                   # express app, middleware, route mounting, 404, error handler
-│       ├── config.js                # env vars with defaults
-│       ├── db/
-│       │   ├── pool.js              # pg Pool
-│       │   └── migrate.js           # idempotent CREATE TABLE/INDEX IF NOT EXISTS
-│       ├── routes/                  # auth.routes.js, todos.routes.js, health.routes.js
-│       ├── controllers/             # parse request -> call service -> shape response
-│       ├── services/                # auth.service.js, todos.service.js (all SQL lives here or in db/)
-│       ├── validation/              # zod schemas per endpoint
-│       ├── middleware/              # auth.js (verify JWT -> req.user), validate.js, errorHandler.js
-│       └── utils/                   # AppError class, helpers
-├── mobile/
-│   ├── package.json / app config
-│   └── src/
-│       ├── config.js                # API base URL from EXPO_PUBLIC_API_URL
-│       ├── api/                     # client.js (fetch wrapper), auth.js, todos.js
-│       ├── state/                   # AuthContext (token, user, login, logout)
-│       ├── navigation/              # auth stack vs app stack
-│       ├── screens/                 # LoginScreen, RegisterScreen, TodoListScreen, TodoFormScreen
-│       └── components/              # TodoItem, StatsBar, FilterChips, ErrorBanner, EmptyState
+│   ├── app.js                   # express app, middleware, route mounting, 404, error handler
+│   ├── config.js                # env vars with defaults
+│   ├── db/
+│   │   ├── migrate.js           # idempotent CREATE TABLE/INDEX IF NOT EXISTS
+│   ├── routes/                  # auth.js, todos.js, health.js
+│   ├── controllers/             # parse request -> call service -> shape response
+│   ├── services/                # auth-service.js, todo-service.js (all SQL lives here)
+│   ├── validation/              # zod schemas per endpoint
+│   ├── middleware/              # auth.js (verify JWT -> req.user), error-handler.js
+│   └── utils/                   # AppError class, helpers
 ├── tests/
-│   ├── api/                         # supertest, hits API_URL
-│   ├── mobile/                      # Appium specs
+│   ├── api/                         # pytest API checks
 │   └── perf/                        # k6 script
 └── .github/workflows/ci.yml         # compose up, wait for /health, run API tests
 ```
@@ -81,7 +64,7 @@ Two containers only: `db` and `api`. The mobile app runs on the host and the pho
 ## 4. Backend design
 
 - **Layers:** `route -> controller -> service -> db`. A layer only calls the one below it. No SQL in routes or controllers.
-- **Request pipeline:** JSON parser -> (auth middleware on protected routes) -> zod validation -> controller -> service -> response.
+- **Request pipeline:** JSON parser -> auth middleware on protected routes -> zod validation -> controller -> service -> response.
 - **Errors:** services throw `AppError(status, code, message, details)`. One `errorHandler` middleware turns any error into the standard error format. Unknown errors become `500 INTERNAL_ERROR` with a generic message. Malformed JSON bodies become `400 VALIDATION_ERROR`.
 - **Auth middleware:** reads `Authorization: Bearer <token>`, verifies with `JWT_SECRET`, loads `req.user = { id }`. Any failure -> `401 UNAUTHORIZED`.
 - **Data isolation:** every todo query includes `WHERE user_id = $1`. For get/patch/delete, a missing row and a foreign row both give `404`.
@@ -104,8 +87,8 @@ Two containers only: `db` and `api`. The mobile app runs on the host and the pho
 
 | Service | Image / build | Ports | Depends on | Healthcheck |
 |---------|---------------|-------|-----------|-------------|
-| `db` | `postgres:16-alpine` | none exposed in base file | none | `pg_isready -U app` |
-| `api` | build `./backend` (`node:20-alpine`) | `"3000:3000"` | `db` (service_healthy) | reachable `/health` |
+| `postgres` | `postgres:16-alpine` | none exposed in base file | none | `pg_isready -U app` |
+| `backend` | build `./backend` (`node:20-alpine`) | `"3000:3000"` | `postgres` (service_healthy) | reachable `/health` |
 
 Volume: `pgdata` for Postgres data.
 
@@ -121,11 +104,11 @@ Rules:
 |-----|---------|---------|---------|
 | `PORT` | api | `3000` | HTTP port |
 | `DATABASE_URL` | api | `postgres://app:app@db:5432/app` | DB connection |
-| `JWT_SECRET` | api | `dev-secret` | Token signing |
-| `JWT_EXPIRES_IN` | api | `24h` | Token lifetime |
+| `JWT_SECRET` | backend | `dev-secret` | Token signing |
+| `JWT_EXPIRES_IN` | backend | `24h` | Token lifetime |
 | `POSTGRES_USER/PASSWORD/DB` | db | `app` / `app` / `app` | DB bootstrap |
 | `EXPO_PUBLIC_API_URL` | mobile | `http://<laptop-ip>:3000` | Backend URL as seen from the phone |
-| `API_URL` | tests | `http://localhost:3000` | Where tests send requests |
+| `BASE_URL` | tests | `http://localhost:3000` | Where tests send requests |
 
 Nothing requires a secret to boot, because every variable has a default.
 

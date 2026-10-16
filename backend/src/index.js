@@ -1,51 +1,32 @@
-const express = require('express');
-const healthRouter = require('./routes/health');
-const { router: exampleRouter, ensureExampleTable } = require('./routes/example');
-const { waitForDb, pool } = require('./db');
-const { connectCache, cacheClient } = require('./cache');
+const { createApp } = require('./app');
+const { migrate } = require('./db/migrate');
+const { pool, waitForDb } = require('./db');
+const { port } = require('./config');
 
-const app = express();
-const port = Number.parseInt(process.env.PORT || '3000', 10);
-
-app.use(express.json());
-
-app.use((request, response, next) => {
-  const startedAt = Date.now();
-  response.on('finish', () => {
-    const elapsed = Date.now() - startedAt;
-    console.log(`${request.method} ${request.originalUrl} ${response.statusCode} ${elapsed}ms`);
-  });
-  next();
-});
-
-app.use(healthRouter);
-app.use(exampleRouter);
-
-app.use((error, _request, response, _next) => {
-  console.error(error);
-  if (response.headersSent) {
-    return;
-  }
-  response.status(500).json({ error: 'internal server error' });
-});
+const app = createApp();
 
 let server;
 let shuttingDown = false;
 
 async function start() {
-  await connectCache();
-  await waitForDb();
-  await ensureExampleTable();
-
-  server = app.listen(port, () => {
+  server = app.listen(port, '0.0.0.0', () => {
     console.log(`backend listening on ${port}`);
   });
+
+  try {
+    await waitForDb();
+    await migrate();
+  } catch (error) {
+    console.error(error);
+    await shutdown('BOOT_FAILURE');
+  }
 }
 
 async function shutdown(signal) {
   if (shuttingDown) {
     return;
   }
+
   shuttingDown = true;
   console.log(`received ${signal}, shutting down`);
 
@@ -53,8 +34,8 @@ async function shutdown(signal) {
   if (server) {
     tasks.push(new Promise((resolve) => server.close(resolve)));
   }
+
   tasks.push(pool.end());
-  tasks.push(cacheClient.quit().catch(() => cacheClient.disconnect()));
 
   await Promise.allSettled(tasks);
   process.exit(0);
@@ -63,13 +44,16 @@ async function shutdown(signal) {
 process.on('SIGTERM', () => {
   shutdown('SIGTERM');
 });
+
 process.on('SIGINT', () => {
   shutdown('SIGINT');
 });
 
-start().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  start().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
 
 module.exports = app;

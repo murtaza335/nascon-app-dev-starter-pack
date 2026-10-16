@@ -48,8 +48,11 @@ def pytest_runtest_makereport(item, call):
     if report.when != 'call':
         return
     req_map = getattr(item.config, '_req_ids_by_nodeid', {})
+    seen = getattr(item.config, '_req_ids_seen', set())
     for req_id in req_map.get(item.nodeid, set()):
         REQ_IDS.add(req_id)
+        seen.add(req_id)
+    item.config._req_ids_seen = seen
 
 
 @pytest.fixture(scope='session')
