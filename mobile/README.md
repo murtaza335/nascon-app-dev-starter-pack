@@ -1,65 +1,70 @@
-# Daylight — mobile demo
+# Daylight mobile
 
-A native Expo / React Native task workspace with a responsive web preview. **Demo mode only:** no backend requests, account, credentials, or token storage. Sample tasks are seeded relative to the current UTC date. Changes live in memory and reset on reload.
+Expo / React Native app connected to the documented backend. There is no demo data or in-memory task store. Register or sign in to manage tasks persisted in PostgreSQL.
 
 ## Run
 
-From `mobile/`, with Node 20.19.4 or newer and npm:
+Use Node 20.19.4 or newer and npm. Start the configured backend from the repository root with `docker compose up --build -d`.
+
+From `mobile/`:
 
 ```sh
 npm ci
-npm start
+npm run web
 ```
 
-Open with an Expo Go version compatible with SDK 54 on a phone connected to the same network. For a browser, run `npm run web` and open `http://localhost:8081`. `npm run android` opens an available emulator. Physical phone and emulator execution still need team verification; no device was available during implementation.
+The browser preview opens at http://localhost:8081. Leave `EXPO_PUBLIC_API_URL` unset for browser development: the Expo server forwards `/api/*` to `http://127.0.0.1:3000`. If the backend is on another computer, set `API_PROXY_TARGET` to its address before starting Expo. The proxy is development-only and avoids requiring changes to the shared backend's CORS configuration.
+
+For Expo Go on a physical phone, set `EXPO_PUBLIC_API_URL` to `http://<laptop-hotspot-ip>:3000` in `mobile/.env.local`, then run `npm start`. Phone and laptop must share a reachable network. Never use `localhost` for a physical phone. Android emulator uses `http://10.0.2.2:3000`. `.env.example` documents examples; restart Expo after changing configuration. Native startup without a configured URL shows a configuration error rather than silently using the wrong host.
+
+Production web hosting must route `/api/*` to the backend on the same origin, or set `EXPO_PUBLIC_API_URL` to a backend that permits the web origin via CORS. The Expo development proxy is not included in the static web export. No Docker files or backend files were changed.
+
+## Authentication and data
+
+- Register/login send exactly `{email, password}` to `/auth/register` and `/auth/login`.
+- Native tokens use `expo-secure-store`. Browser preview uses `sessionStorage` so refresh keeps the session in the same tab; closing the tab ends that browser session. Passwords are never stored.
+- Saved tokens are validated with `/auth/me` at startup. Network failures offer retry without discarding the saved token. A protected `401` clears the token and opens Login. Logout also clears storage and unmounts account-specific task state.
+- Tasks use `/todos`, `/todos/:id`, and `/todos/stats`. Editing fetches the current record first. Snake_case fields, list/stats envelopes, validation details, and `204` deletion handling follow root `REQUIREMENTS.md`.
+- Search (300ms debounce), status/priority filters, sorting, pagination, CRUD and counts all use the server. No fabricated tasks or fallback data. Errors display the server's `error.message`, with field details when supplied.
+- Successful writes followed by refresh failure are reported as saved with a refresh prompt, avoiding an accidental duplicate submission. Late list responses and expired responses from an older token cannot overwrite a newer session.
+
+## Structure
+
+- `App.js`: login/register, dashboard, task editor and dialogs; auth gate switches between signed-out and signed-in UI. Task form remains a native modal.
+- `src/config.js`: `EXPO_PUBLIC_API_URL`, with `/api` for the web development proxy.
+- `src/api/client.js`: JSON requests, bearer tokens, typed errors, 15-second timeout, protected-401 callback.
+- `src/api/auth.js`, `todos.js`: documented endpoint adapters; network calls stay out of screens.
+- `src/state/AuthContext.js`, `session.js`: session restoration, login/register/logout, stale-session guards.
+- `src/state/storage.native.js` / `storage.web.js`: platform-specific token storage.
+- `metro.config.js`: dependency-free development proxy, `API_PROXY_TARGET` defaults to `http://127.0.0.1:3000`.
+- `tests/`: isolated request/session tests. `integration/`: actual-backend checks using a uniquely generated test account and disposable task; task cleanup runs afterward. Test accounts remain because the API has no account-delete endpoint.
+
+Dependencies remain Expo SDK 54 / React 19.1 / React Native 0.81.5, safe-area-context, status-bar and Feather icons. Added the already documented `expo-secure-store` via `expo install`, including its config plugin and lockfile. Teammates should run `npm ci` in `mobile/` after pulling.
+
+## Verification and local traceability
 
 ```sh
 npm test
+npm run test:integration
 npm run export:web
-npx expo export --platform android --output-dir dist-native
+npx expo export --platform android --output-dir dist-native --max-workers 1
 ```
 
-The production web export is generated under `dist/` and is ignored. No Docker configuration is required or changed for this mobile preview.
+Integration tests default to `http://127.0.0.1:3000`; set `API_URL` to test another backend. Android export verifies JavaScript/Hermes bundling, not Gradle/APK compilation or device behavior.
 
-Verification during implementation: all five service tests passed; production web export succeeded; Android Hermes bundle export succeeded (606 modules). Android export checks JavaScript/Hermes bundling; it does not compile Gradle, create an APK, or verify device behavior. Browser checks passed for creating, searching, completing, filtering, confirming deletion, deleting, and empty-result recovery. Empty-title and invalid-calendar-date errors were checked in the UI. Visual review passed after fixing statistics layout at 390px and checking the editor at 375px. Screenshots are available locally in the ignored `screenshots/` folder. Physical phone/emulator, native keyboard, large system text, and tablet verification remain pending.
+Exports use one worker to keep memory use manageable alongside Docker. Run web and Android exports sequentially on this machine; parallel exports exceeded available memory, and both final single-worker exports succeeded.
 
-## Implemented experience
+Verified: 10 isolated tests and the live integration test passed. Web and Android JavaScript exports passed. Browser checks against the actual backend covered registration, invalid-password feedback, login, server title-validation errors, creating a task, restoring the session and saved task after reload, fetching/editing, completing/filtering, confirmed deletion, and logout remaining signed out after reload. The 390px live dashboard and login layouts were visually checked. Disposable UI and integration tasks were deleted after testing.
 
-- Dashboard, progress, total/completed/pending/overdue counts, and date-relative demo content.
-- Create and edit title, description, priority, and optional due date. Calendar validation rejects impossible dates. Title is trimmed and required, up to 200 characters; description up to 1,000 characters.
-- Reversible completion, confirmation before deletion, feedback, search across title and description, combined status/priority filters, and four sort fields with ascending/descending order.
-- Page controls appear when more than 20 matching tasks exist. Pull to refresh on native. Empty search recovery, loading and error states.
-- Phone layout and wide-screen sidebar, high contrast forest/cream palette, labeled controls, keyboard-friendly forms, and minimum 44-point touch targets.
-
-## Structure and dependencies
-
-- `index.js`: Expo entry point.
-- `App.js`: dashboard, shared UI components, editor, and dialogs. Plain React hooks manage demo screen state. Safe-area and keyboard handling support native screens.
-- `src/api/demo.js`: independent asynchronous local data service; no network calls in screens. Keeps the documented snake_case Todo shapes, list envelope, stats envelope, error code/message/details, and null delete result. Replace this boundary with real HTTP integration later.
-- `tests/demo.test.js`: Node's built-in test runner, no test dependency.
-- Expo SDK 54, React 19.1, React Native 0.81.5; React DOM and React Native Web for browser preview; `react-native-safe-area-context` for safe device insets; `expo-status-bar` for status bar styling; `@expo/vector-icons` (Feather only) for consistent accessible task affordances. Versions were checked against the installed Expo `bundledNativeModules.json`; npm lockfile captures the resolved dependency tree.
-
-No new service, image, backend endpoint, or environment variable. `EXPO_PUBLIC_API_URL` is intentionally unused until live integration. Navigation between dashboard and task form uses a native modal for the demo; the documented auth/navigation stacks remain future integration work.
-
-## Local task status and traceability
-
-| Requirement | Demo implementation | Verification |
+| Requirement | Live implementation | Verification |
 | --- | --- | --- |
-| R4, R9 | Create/edit task modal and validation | CRUD happy path and invalid title/date/priority/description tests |
-| R5 | Contract-shaped list and pagination | Pagination, empty-page, and final-page deletion recovery tests |
-| R6–R8 | Status, priority, text search, sort/order controls | Combined filters, description search, priority/title/date sorting tests |
-| R10 | Checkbox completion and reversal | Completion and reversal/statistics tests |
-| R11 | Delete dialog, then local deletion | Delete and repeated-delete NOT_FOUND test |
-| R12 | Counts and progress refreshed after mutations | Stats invariant and UTC overdue tests |
-| R14 | Top-level message and field errors, list error/retry state | Validation failure tests; visual UI verification separately |
-| R1–R3, R13 | Deferred: authentication, persistence, and ownership require backend | Not claimed implemented |
+| R1–R2 | Register/login screens and API calls, required testIDs | Auth adapter tests, real registration/login and invalid-password case |
+| R3 | Secure native token persistence, `/auth/me`, logout, protected-401 handling | Session restore/logout/expiry/race/storage failure tests |
+| R4, R9 | Create and fetch/edit task forms | Request contract tests and real CRUD integration |
+| R5–R8 | Server pagination, filters, search, sort | Query encoding/empty-filter tests and combined live filter check |
+| R10–R12 | PATCH completion, confirmed DELETE, refreshed server stats | Real update/delete/stats, `204` parsing test |
+| R14 | API error message/details, timeout/network errors, retry states | Validation/auth/network/invalid-response tests |
 
-Required task-list and task-form `testID`s match root `REQUIREMENTS.md`. `logout-button` is intentionally deferred until a real authenticated session and logout flow exist. Demo information controls have their own accessible labels. Login/register screens and their testIDs are intentionally deferred. Auth, 401 handling, secure token persistence, server error mapping, live endpoint checks, and Appium remain integration tasks.
+All changes are restricted to `mobile/`, as requested. Shared `TRACEABILITY.md`, architecture and task documents were intentionally left for the team's editor to sync from these notes. Actual contract files are at the repository root; the referenced `docs/REQUIREMENTS.md`, `docs/ARCHITECTURE.md`, and `docs/TASKS.md` were absent.
 
-## Assumptions and handoff
-
-The user's instruction to use demo data and write only inside `mobile/` overrides the usual root documentation edits. Root requirements/architecture/traceability/task files were read where present but **not modified** to avoid conflicts with teammates. The team should sync these local notes into shared docs when coordinating integration. The repository currently keeps the contract at root `REQUIREMENTS.md` / `ARCHITECTURE.md`, rather than the documented `docs/` paths.
-
-Stats compare due dates with UTC today, matching the API contract; the header displays the device's local date. A date-only input avoids timezone conversion and explicitly explains the accepted format. Changes are intentionally transient. No auth bypass or mock network layer is presented as a real backend.
-
-Initial dependency installation reported transitive audit findings (12 moderate, 23 high). No forced dependency upgrades were applied because they may break SDK compatibility; review compatible patches before release.
+Physical phone/emulator, native keyboard and large system text checks remain pending. The existing Expo dependency tree has transitive audit findings; forced SDK-breaking upgrades were not made.
